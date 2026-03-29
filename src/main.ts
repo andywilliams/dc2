@@ -1,14 +1,12 @@
 import { Input } from "./input";
 import { Camera } from "./camera";
-import { TileMap, TILE_SIZE, TILE_WALL, generateDemoMap } from "./tilemap";
+import { TileMap, TILE_SIZE, TILE_DOOR, TILE_STAIRS_DOWN, generateTestMap } from "./tilemap";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 const CANVAS_W = 800;
 const CANVAS_H = 600;
-const MAP_COLS = 40;
-const MAP_ROWS = 30;
 const PLAYER_SPEED = 160; // px / sec
 
 // ---------------------------------------------------------------------------
@@ -20,10 +18,10 @@ canvas.height = CANVAS_H;
 const ctx = canvas.getContext("2d")!;
 
 const input = new Input(canvas);
-const tileMap: TileMap = generateDemoMap(MAP_COLS, MAP_ROWS);
+const tileMap: TileMap = generateTestMap();
 const camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 
-// Player state — starts in the centre-ish of the map
+// Player state — starts in room 1
 const player = {
   x: 5 * TILE_SIZE + TILE_SIZE / 2,
   y: 5 * TILE_SIZE + TILE_SIZE / 2,
@@ -44,9 +42,26 @@ function canMoveTo(px: number, py: number, half: number, map: TileMap): boolean 
   for (const o of offsets) {
     const col = Math.floor((px + o.x) / TILE_SIZE);
     const row = Math.floor((py + o.y) / TILE_SIZE);
-    if (map.get(col, row) === TILE_WALL) return false;
+    if (map.isSolid(col, row)) return false;
   }
   return true;
+}
+
+/** Get the tile the player is standing on. */
+function playerTile(): { col: number; row: number } {
+  return {
+    col: Math.floor(player.x / TILE_SIZE),
+    row: Math.floor(player.y / TILE_SIZE),
+  };
+}
+
+// HUD message state
+let hudMessage = "";
+let hudMessageTimer = 0;
+
+function showHudMessage(msg: string, duration = 2): void {
+  hudMessage = msg;
+  hudMessageTimer = duration;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,13 +99,36 @@ function frame(time: number): void {
   if (canMoveTo(newX, player.y, half, tileMap)) player.x = newX;
   if (canMoveTo(player.x, newY, half, tileMap)) player.y = newY;
 
-  // Mouse click movement
+  // Mouse click — inspect tile
   if (input.mouse.clicked) {
     const world = camera.screenToWorld(input.mouse.x, input.mouse.y);
     const col = Math.floor(world.x / TILE_SIZE);
     const row = Math.floor(world.y / TILE_SIZE);
-    // Log clicked tile (placeholder for future interaction)
-    console.log(`Clicked tile (${col}, ${row})`);
+    const cell = tileMap.getCell(col, row);
+    if (cell?.meta?.label) {
+      showHudMessage(cell.meta.label);
+    }
+  }
+
+  // Check what tile the player is standing on
+  const pt = playerTile();
+  const standingOn = tileMap.getCell(pt.col, pt.row);
+
+  // Tile interaction hints
+  if (standingOn?.type === TILE_STAIRS_DOWN) {
+    hudMessage = `[${standingOn.meta?.label ?? "Stairs down"}] — press E to descend`;
+    hudMessageTimer = 0.1;
+  } else if (standingOn?.type === TILE_DOOR && standingOn.meta?.label) {
+    hudMessage = standingOn.meta.label;
+    hudMessageTimer = 0.1;
+  }
+
+  // Decay HUD message
+  if (hudMessageTimer > 0) {
+    hudMessageTimer -= dt;
+    if (hudMessageTimer <= 0) {
+      hudMessage = "";
+    }
   }
 
   camera.follow(player.x, player.y);
@@ -115,8 +153,19 @@ function frame(time: number): void {
   // HUD
   ctx.fillStyle = "#ccc";
   ctx.font = "14px monospace";
-  ctx.fillText(`pos: (${Math.round(player.x)}, ${Math.round(player.y)})`, 8, 18);
+  ctx.fillText(`pos: (${Math.round(player.x)}, ${Math.round(player.y)})  tile: (${pt.col}, ${pt.row})`, 8, 18);
   ctx.fillText("WASD / Arrows to move — Click to inspect tile", 8, 36);
+
+  // HUD message
+  if (hudMessage) {
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(CANVAS_W / 2 - 160, CANVAS_H - 50, 320, 30);
+    ctx.fillStyle = "#ffd700";
+    ctx.font = "14px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(hudMessage, CANVAS_W / 2, CANVAS_H - 30);
+    ctx.textAlign = "left";
+  }
 
   requestAnimationFrame(frame);
 }
