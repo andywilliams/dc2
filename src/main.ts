@@ -19,6 +19,7 @@ import {
   spawnEnemies,
   renderEnemies,
   getEnemiesInRange,
+  updateAggro,
 } from "./enemies";
 import {
   CombatState,
@@ -58,14 +59,18 @@ let camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 // Party state — starts at dungeon spawn point
 let party: PartyState = createPartyState(spawnX, spawnY);
 
+// Floor tracking
+let currentFloor = 1;
+
 // Enemy state
-let enemies: Enemy[] = spawnEnemies(rooms, tileMap, [spawnX], [spawnY]);
+let enemies: Enemy[] = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
 
 // Combat state
 let combat: CombatState | null = null;
 
 /** Regenerate dungeon (press R to get a new layout). */
 function regenerate(): void {
+  currentFloor = 1;
   const result = generateDungeon();
   tileMap = result.map;
   spawnX = result.spawnX;
@@ -73,9 +78,33 @@ function regenerate(): void {
   rooms = result.rooms;
   camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
   party = createPartyState(spawnX, spawnY);
-  enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY]);
+  enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
   combat = null;
   showHudMessage("New dungeon generated!");
+}
+
+/** Descend to the next floor. */
+function descendFloor(): void {
+  currentFloor++;
+  const result = generateDungeon();
+  tileMap = result.map;
+  spawnX = result.spawnX;
+  spawnY = result.spawnY;
+  rooms = result.rooms;
+  camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
+
+  // Keep party HP but reset position
+  party.col = spawnX;
+  party.row = spawnY;
+  party.px = spawnX * TILE_SIZE + TILE_SIZE / 2;
+  party.py = spawnY * TILE_SIZE + TILE_SIZE / 2;
+  party.turnPhase = "move";
+  party.reachableTiles = null;
+  party.movePointsLeft = party.movePointsPerTurn;
+
+  enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+  combat = null;
+  showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +268,9 @@ function frame(time: number): void {
       cacheReachable(party, tileMap);
     }
 
+    // Update enemy aggro based on party proximity
+    updateAggro(enemies, party.col, party.row);
+
     // Check for combat trigger after movement
     if (party.turnPhase === "move") {
       checkCombatTrigger();
@@ -247,10 +279,13 @@ function frame(time: number): void {
     // Check what tile the party is standing on
     const standingOn = tileMap.getCell(party.col, party.row);
 
-    // Tile interaction hints
+    // Tile interaction hints and stair descent
     if (standingOn?.type === TILE_STAIRS_DOWN) {
-      hudMessage = `[${standingOn.meta?.label ?? "Stairs down"}] — press E to descend`;
+      hudMessage = `Floor ${currentFloor} — [${standingOn.meta?.label ?? "Stairs down"}] — press E to descend`;
       hudMessageTimer = 0.1;
+      if (input.justPressed("KeyE")) {
+        descendFloor();
+      }
     } else if (standingOn?.type === TILE_DOOR && standingOn.meta?.label) {
       hudMessage = standingOn.meta.label;
       hudMessageTimer = 0.1;
@@ -309,11 +344,11 @@ function frame(time: number): void {
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
     ctx.fillText(
-      `Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+      `Floor ${currentFloor} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
       8,
       18,
     );
-    ctx.fillText("Click to move — Space = end turn — R = regenerate", 8, 36);
+    ctx.fillText("Click to move — Space = end turn — E = descend — R = regenerate", 8, 36);
 
     renderPartyHUD(ctx, party, CANVAS_W);
   }

@@ -107,11 +107,17 @@ export function startCombat(
       };
     });
 
+  // All enemies entering combat become aggro
+  const combatEnemies = enemies.filter((e) => e.alive);
+  for (const e of combatEnemies) {
+    e.aggro = true;
+  }
+
   return {
     active: true,
     phase: "player_select",
     units,
-    enemies: enemies.filter((e) => e.alive),
+    enemies: combatEnemies,
     selectedUnit: -1,
     reachableTiles: null,
     attackableTiles: [],
