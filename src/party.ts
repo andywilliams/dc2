@@ -2,6 +2,7 @@
 
 import { TileMap, TILE_SIZE } from "./tilemap";
 import { getReachableTiles, findPath, GridPos } from "./pathfinding";
+import { Equipment, createEquipment, getEffectiveMaxHp } from "./loot";
 
 // ── Character definition ───────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ export interface Character {
   color: string;       // primary fill color
   accent: string;      // outline / accent color
   icon: string;        // single character icon rendered on sprite
+  equipment: Equipment;
 }
 
 // ── Party state ────────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ export function createDefaultParty(): Character[] {
       color: "#4488cc",
       accent: "#6ab0ff",
       icon: "K",
+      equipment: createEquipment(),
     },
     {
       name: "Mage",
@@ -61,6 +64,7 @@ export function createDefaultParty(): Character[] {
       color: "#9944cc",
       accent: "#c477ff",
       icon: "M",
+      equipment: createEquipment(),
     },
     {
       name: "Rogue",
@@ -68,6 +72,7 @@ export function createDefaultParty(): Character[] {
       color: "#44aa44",
       accent: "#77dd77",
       icon: "R",
+      equipment: createEquipment(),
     },
     {
       name: "Cleric",
@@ -75,6 +80,7 @@ export function createDefaultParty(): Character[] {
       color: "#ccaa44",
       accent: "#ffdd77",
       icon: "C",
+      equipment: createEquipment(),
     },
   ];
 }
@@ -342,8 +348,9 @@ export function renderPartyHUD(
     ctx.fillStyle = "rgba(255, 0, 0, 0.3)";
     ctx.fillRect(barX, y - 6, barW, barH);
 
-    // HP bar fill
-    const hpRatio = char.stats.hp / char.stats.maxHp;
+    // HP bar fill (use effective max HP with equipment)
+    const effectiveMax = getEffectiveMaxHp(char);
+    const hpRatio = char.stats.hp / effectiveMax;
     const hpColor = hpRatio > 0.5 ? "#44bb44" : hpRatio > 0.25 ? "#bbbb44" : "#bb4444";
     ctx.fillStyle = hpColor;
     ctx.fillRect(barX, y - 6, barW * hpRatio, barH);
@@ -352,7 +359,7 @@ export function renderPartyHUD(
     ctx.fillStyle = "#aaa";
     ctx.font = "9px monospace";
     ctx.fillText(
-      `${char.stats.hp}/${char.stats.maxHp}`,
+      `${char.stats.hp}/${effectiveMax}`,
       panelX + 134,
       y,
     );
