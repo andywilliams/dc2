@@ -1,45 +1,37 @@
 /**
- * Loot & inventory system: item definitions, loot tables, equipment,
- * chests, and inventory UI.
+ * Loot & inventory system: loot tables, equipment, chests, and inventory UI.
+ * Item data model and definitions live in items.ts.
  */
 
 import { TILE_SIZE } from "./tilemap";
 import { Character } from "./party";
+import {
+  type Item,
+  type ItemSlot,
+  type StatModifiers,
+  type Rarity,
+  type ItemType,
+  type ItemDef,
+  RARITY_TIERS,
+  createItem,
+  createItemFromDef,
+  getAllItemDefs,
+  getItemDef,
+  getItemDefsByType,
+  getItemDefsByRarity,
+} from "./items";
 
-// ── Item types ─────────────────────────────────────────────────────────────
-
-export type ItemSlot = "weapon" | "armour" | "accessory";
-
-export interface StatModifiers {
-  atk?: number;
-  def?: number;
-  maxHp?: number;
-  moveRange?: number;
-}
-
-export interface Item {
-  id: number;
-  name: string;
-  slot: ItemSlot;
-  mods: StatModifiers;
-  color: string;
-  icon: string;
-  /** Floor level the item dropped on (used for display). */
-  tier: number;
-}
-
-let nextItemId = 1;
-
-function createItem(
-  name: string,
-  slot: ItemSlot,
-  mods: StatModifiers,
-  color: string,
-  icon: string,
-  tier: number,
-): Item {
-  return { id: nextItemId++, name, slot, mods, color, icon, tier };
-}
+// Re-export item types so existing consumers don't break
+export type { Item, ItemSlot, StatModifiers, Rarity, ItemType, ItemDef };
+export {
+  RARITY_TIERS,
+  createItem,
+  createItemFromDef,
+  getAllItemDefs,
+  getItemDef,
+  getItemDefsByType,
+  getItemDefsByRarity,
+};
 
 // ── Equipment on characters ─────────────────────────────────────────────────
 
@@ -158,34 +150,36 @@ export function unequipItem(
 interface LootEntry {
   name: string;
   slot: ItemSlot;
+  itemType: ItemType;
   mods: StatModifiers;
+  rarity: Rarity;
   color: string;
   icon: string;
   weight: number; // relative drop chance
 }
 
 const WEAPON_POOL: LootEntry[] = [
-  { name: "Iron Sword", slot: "weapon", mods: { atk: 2 }, color: "#aab0bb", icon: "/", weight: 10 },
-  { name: "Steel Blade", slot: "weapon", mods: { atk: 3 }, color: "#ccd0dd", icon: "/", weight: 6 },
-  { name: "War Axe", slot: "weapon", mods: { atk: 4, def: -1 }, color: "#bb7744", icon: "P", weight: 4 },
-  { name: "Magic Staff", slot: "weapon", mods: { atk: 3, maxHp: 5 }, color: "#9966cc", icon: "|", weight: 3 },
-  { name: "Flame Dagger", slot: "weapon", mods: { atk: 5 }, color: "#ff6633", icon: "!", weight: 2 },
+  { name: "Iron Sword", slot: "weapon", itemType: "weapon", mods: { atk: 2 }, rarity: "common", color: "#aab0bb", icon: "/", weight: 10 },
+  { name: "Steel Blade", slot: "weapon", itemType: "weapon", mods: { atk: 3 }, rarity: "uncommon", color: "#ccd0dd", icon: "/", weight: 6 },
+  { name: "War Axe", slot: "weapon", itemType: "weapon", mods: { atk: 4, def: -1 }, rarity: "rare", color: "#bb7744", icon: "P", weight: 4 },
+  { name: "Magic Staff", slot: "weapon", itemType: "weapon", mods: { atk: 3, maxHp: 5 }, rarity: "rare", color: "#9966cc", icon: "|", weight: 3 },
+  { name: "Flame Dagger", slot: "weapon", itemType: "weapon", mods: { atk: 5 }, rarity: "epic", color: "#ff6633", icon: "!", weight: 2 },
 ];
 
 const ARMOUR_POOL: LootEntry[] = [
-  { name: "Leather Vest", slot: "armour", mods: { def: 1 }, color: "#8b6914", icon: "T", weight: 10 },
-  { name: "Chain Mail", slot: "armour", mods: { def: 2 }, color: "#999999", icon: "#", weight: 6 },
-  { name: "Iron Plate", slot: "armour", mods: { def: 3, moveRange: -1 }, color: "#778899", icon: "H", weight: 4 },
-  { name: "Mage Robe", slot: "armour", mods: { def: 1, maxHp: 8 }, color: "#4466aa", icon: "n", weight: 3 },
-  { name: "Dragon Scale", slot: "armour", mods: { def: 4 }, color: "#cc3333", icon: "D", weight: 2 },
+  { name: "Leather Vest", slot: "armour", itemType: "armor", mods: { def: 1 }, rarity: "common", color: "#8b6914", icon: "T", weight: 10 },
+  { name: "Chain Mail", slot: "armour", itemType: "armor", mods: { def: 2 }, rarity: "uncommon", color: "#999999", icon: "#", weight: 6 },
+  { name: "Iron Plate", slot: "armour", itemType: "armor", mods: { def: 3, moveRange: -1 }, rarity: "rare", color: "#778899", icon: "H", weight: 4 },
+  { name: "Mage Robe", slot: "armour", itemType: "armor", mods: { def: 1, maxHp: 8 }, rarity: "rare", color: "#4466aa", icon: "n", weight: 3 },
+  { name: "Dragon Scale", slot: "armour", itemType: "armor", mods: { def: 4 }, rarity: "epic", color: "#cc3333", icon: "D", weight: 2 },
 ];
 
 const ACCESSORY_POOL: LootEntry[] = [
-  { name: "Speed Ring", slot: "accessory", mods: { moveRange: 1 }, color: "#44cccc", icon: "o", weight: 8 },
-  { name: "Power Amulet", slot: "accessory", mods: { atk: 2 }, color: "#cc4444", icon: "v", weight: 6 },
-  { name: "Shield Charm", slot: "accessory", mods: { def: 2 }, color: "#4488cc", icon: "v", weight: 6 },
-  { name: "Life Pendant", slot: "accessory", mods: { maxHp: 10 }, color: "#44cc44", icon: "v", weight: 5 },
-  { name: "Hero Medal", slot: "accessory", mods: { atk: 1, def: 1, maxHp: 5 }, color: "#ffcc00", icon: "*", weight: 2 },
+  { name: "Speed Ring", slot: "accessory", itemType: "armor", mods: { moveRange: 1 }, rarity: "common", color: "#44cccc", icon: "o", weight: 8 },
+  { name: "Power Amulet", slot: "accessory", itemType: "armor", mods: { atk: 2 }, rarity: "uncommon", color: "#cc4444", icon: "v", weight: 6 },
+  { name: "Shield Charm", slot: "accessory", itemType: "armor", mods: { def: 2 }, rarity: "uncommon", color: "#4488cc", icon: "v", weight: 6 },
+  { name: "Life Pendant", slot: "accessory", itemType: "armor", mods: { maxHp: 10 }, rarity: "rare", color: "#44cc44", icon: "v", weight: 5 },
+  { name: "Hero Medal", slot: "accessory", itemType: "armor", mods: { atk: 1, def: 1, maxHp: 5 }, rarity: "epic", color: "#ffcc00", icon: "*", weight: 2 },
 ];
 
 const ALL_LOOT = [...WEAPON_POOL, ...ARMOUR_POOL, ...ACCESSORY_POOL];
@@ -217,7 +211,7 @@ export function rollEnemyDrop(floor: number): Item | null {
   if (Math.random() > 0.5) return null; // 50% drop rate
   const entry = pickWeightedRandom(ALL_LOOT);
   const mods = scaleItemForFloor(entry.mods, floor);
-  return createItem(entry.name, entry.slot, mods, entry.color, entry.icon, floor);
+  return createItem(entry.name, entry.slot, mods, entry.color, entry.icon, floor, entry.rarity, entry.itemType);
 }
 
 /** Generate chest loot — always drops, slightly better quality. */
@@ -227,7 +221,7 @@ export function rollChestLoot(floor: number): Item {
   const entry = pool.length > 0 ? pickWeightedRandom(pool) : pickWeightedRandom(ALL_LOOT);
   const mods = scaleItemForFloor(entry.mods, floor);
   const name = floor >= 3 ? `Fine ${entry.name}` : entry.name;
-  return createItem(name, entry.slot, mods, entry.color, entry.icon, floor);
+  return createItem(name, entry.slot, mods, entry.color, entry.icon, floor, entry.rarity, entry.itemType);
 }
 
 // ── Chests (world entities) ────────────────────────────────────────────────
