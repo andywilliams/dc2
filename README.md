@@ -29,9 +29,32 @@ Diagonal movement is normalized so you won't move faster on diagonals.
 
 ## Gameplay
 
-You control a player (light blue square) navigating a tile-based dungeon. The map is a 40x30 grid of 32px tiles with floor and wall types. Walls block movement — the player slides along them rather than stopping dead.
+You control a player (light blue square) navigating a tile-based dungeon. The map is a 30x22 grid of 32px tiles with four tile types. Walls and locked doors block movement — the player slides along them rather than stopping dead.
 
-Clicking a tile logs its grid coordinates to the console (placeholder for future interaction like attacking, opening doors, or inspecting objects).
+Clicking a tile displays its label in the HUD (doors, stairs, etc.). Standing on stairs or doors shows an interaction hint at the bottom of the screen.
+
+### Tile Types
+
+| Tile | Appearance | Behavior |
+|------|-----------|----------|
+| Floor | Dark surface with subtle texture dots | Passable |
+| Wall | Brick pattern with mortar lines | Blocks movement |
+| Door | Wooden panel with colored handle (red = locked, gold = unlocked) | Locked doors block movement; unlocked doors are passable |
+| Stairs Down | Descending steps with blue arrow indicator | Passable; shows interaction hint when stood on |
+
+Each tile can carry optional **metadata** — labels for display, locked state for doors, and destination floor for stairs.
+
+### Test Dungeon
+
+The game loads a hardcoded 5-room test dungeon:
+
+1. **Entry Hall** (top-left) — starting room
+2. **Corridor** — horizontal passage connecting rooms 1 and 3
+3. **Large Chamber** (top-right) — open room with decorative pillars and stairs down
+4. **Side Room** (bottom-left) — accessible via vertical corridor, contains a second stairway
+5. **Treasure Room** (bottom-right) — sealed behind a locked door
+
+Rooms are connected by 4 doors (3 unlocked, 1 locked) and 2 stairways leading to level 2.
 
 ## Architecture
 
@@ -40,7 +63,7 @@ src/
 ├── main.ts      Game loop, player state, rendering
 ├── input.ts     Keyboard + mouse input with per-frame buffering
 ├── camera.ts    Viewport that follows the player, clamped to world bounds
-└── tilemap.ts   Tile grid storage, viewport-culled rendering, demo map generator
+└── tilemap.ts   Typed tile grid, per-tile metadata, viewport-culled rendering, test dungeon
 ```
 
 ### Game Loop
@@ -58,9 +81,9 @@ The camera centers on the player and clamps to world boundaries so you never see
 
 ### Tile Map
 
-Tiles are stored in a flat array indexed by `row * cols + col`. Only tiles within the camera viewport are drawn each frame (viewport culling). Out-of-bounds lookups return `TILE_WALL` to prevent the player from escaping the map.
+Each tile is stored as a `TileCell` containing a type and optional metadata (`TileMeta`). Cells are held in a flat array indexed by `row * cols + col`. Only tiles within the camera viewport are drawn each frame (viewport culling). Out-of-bounds lookups return `TILE_WALL` to prevent the player from escaping the map.
 
-The demo map generator creates border walls and scatters ~12% random interior walls for testing.
+Collision uses `isSolid()` — walls always block, locked doors block, and everything else is passable. Each tile type has its own renderer with distinct visuals (brick pattern for walls, wooden panel for doors, descending steps for stairs).
 
 ## Tech Stack
 
