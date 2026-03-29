@@ -34,6 +34,20 @@ import {
   renderCombatHUD,
   renderPopups,
 } from "./combat";
+import {
+  Inventory,
+  Chest,
+  InventoryUI,
+  createInventory,
+  createInventoryUI,
+  addItem,
+  rollEnemyDrop,
+  rollChestLoot,
+  createChest,
+  renderChests,
+  renderInventoryUI,
+  handleInventoryClick,
+} from "./loot";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,6 +82,43 @@ let enemies: Enemy[] = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentF
 // Combat state
 let combat: CombatState | null = null;
 
+// Loot & inventory
+let inventory: Inventory = createInventory();
+let chests: Chest[] = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
+let inventoryUI: InventoryUI = createInventoryUI();
+
+/** Spawn chests in dungeon rooms (skip first room = spawn room). */
+function spawnChests(
+  dungeonRooms: typeof rooms,
+  occupiedCols: number[],
+  occupiedRows: number[],
+  floor: number,
+): Chest[] {
+  const result: Chest[] = [];
+  const occupied = new Set<string>();
+  for (let i = 0; i < occupiedCols.length; i++) {
+    occupied.add(`${occupiedCols[i]},${occupiedRows[i]}`);
+  }
+
+  // ~40% of non-spawn rooms get a chest
+  for (let ri = 1; ri < dungeonRooms.length; ri++) {
+    if (Math.random() > 0.4) continue;
+    const room = dungeonRooms[ri];
+    // Place in a random interior tile
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const col = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
+      const row = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+      const key = `${col},${row}`;
+      if (!occupied.has(key)) {
+        occupied.add(key);
+        result.push(createChest(col, row, rollChestLoot(floor)));
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 /** Regenerate dungeon (press R to get a new layout). */
 function regenerate(): void {
   currentFloor = 1;
@@ -80,6 +131,9 @@ function regenerate(): void {
   party = createPartyState(spawnX, spawnY);
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
   combat = null;
+  inventory = createInventory();
+  chests = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
+  inventoryUI = createInventoryUI();
   showHudMessage("New dungeon generated!");
 }
 
@@ -103,6 +157,7 @@ function descendFloor(): void {
   party.movePointsLeft = party.movePointsPerTurn;
 
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+  chests = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
   combat = null;
   showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
 }
@@ -163,6 +218,22 @@ function handleCombatEnd(): void {
     const member = party.members.find((m) => m.name === unit.character.name);
     if (member) {
       member.stats.hp = unit.character.stats.hp;
+    }
+  }
+
+  // Roll loot drops from defeated enemies
+  if (combat.victory) {
+    for (const ce of combat.enemies) {
+      if (!ce.alive) {
+        const drop = rollEnemyDrop(currentFloor);
+        if (drop) {
+          if (addItem(inventory, drop)) {
+            showHudMessage(`Loot: ${drop.name} (${drop.mods.atk ? "+" + drop.mods.atk + " ATK" : ""}${drop.mods.def ? "+" + drop.mods.def + " DEF" : ""})`, 3);
+          } else {
+            showHudMessage("Inventory full! Item lost.", 3);
+          }
+        }
+      }
     }
   }
 
@@ -234,20 +305,38 @@ function frame(time: number): void {
   } else {
     // ── Exploration mode ─────────────────────────────────────────────────
 
+    // Toggle inventory on I press
+    if (input.justPressed("KeyI")) {
+      inventoryUI.open = !inventoryUI.open;
+    }
+
+    // Character selection in inventory: 1-4 keys
+    if (inventoryUI.open) {
+      if (input.justPressed("Digit1")) inventoryUI.selectedCharIdx = 0;
+      if (input.justPressed("Digit2")) inventoryUI.selectedCharIdx = 1;
+      if (input.justPressed("Digit3")) inventoryUI.selectedCharIdx = 2;
+      if (input.justPressed("Digit4")) inventoryUI.selectedCharIdx = 3;
+    }
+
+    // Handle clicks — inventory UI consumes clicks when open
+    if (input.mouse.clicked && inventoryUI.open) {
+      handleInventoryClick(inventoryUI, inventory, party.members, input.mouse.x, input.mouse.y, CANVAS_W, CANVAS_H);
+    }
+
     // Regenerate dungeon on R press
-    if (input.justPressed("KeyR")) {
+    if (input.justPressed("KeyR") && !inventoryUI.open) {
       regenerate();
     }
 
     // End turn on Space press
-    if (input.justPressed("Space") && party.turnPhase === "move") {
+    if (input.justPressed("Space") && party.turnPhase === "move" && !inventoryUI.open) {
       endTurn(party);
       cacheReachable(party, tileMap);
       showHudMessage("New turn!");
     }
 
-    // Click to move
-    if (input.mouse.clicked && party.turnPhase === "move") {
+    // Click to move (only when inventory is closed)
+    if (input.mouse.clicked && party.turnPhase === "move" && !inventoryUI.open) {
       const hover = getHoverTile();
       if (startMove(party, hover.col, hover.row, tileMap)) {
         // Movement started
@@ -266,6 +355,18 @@ function frame(time: number): void {
     // After movement completes, re-cache reachable tiles
     if (party.turnPhase === "move" && !party.reachableTiles) {
       cacheReachable(party, tileMap);
+    }
+
+    // Check for chest interaction at party position
+    for (const chest of chests) {
+      if (!chest.opened && chest.col === party.col && chest.row === party.row) {
+        chest.opened = true;
+        if (addItem(inventory, chest.item)) {
+          showHudMessage(`Opened chest: ${chest.item.name}!`, 3);
+        } else {
+          showHudMessage("Chest opened but inventory full!", 3);
+        }
+      }
     }
 
     // Update enemy aggro based on party proximity
@@ -331,6 +432,7 @@ function frame(time: number): void {
       ctx.strokeRect(hx + 1, hy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
     }
 
+    renderChests(ctx, chests);
     renderParty(ctx, party);
     renderEnemies(ctx, enemies);
   }
@@ -348,9 +450,14 @@ function frame(time: number): void {
       8,
       18,
     );
-    ctx.fillText("Click to move — Space = end turn — E = descend — R = regenerate", 8, 36);
+    ctx.fillText("Click to move — Space = end turn — E = descend — I = inventory — R = regenerate", 8, 36);
 
     renderPartyHUD(ctx, party, CANVAS_W);
+  }
+
+  // Inventory UI (screen coords, on top of everything)
+  if (!combat) {
+    renderInventoryUI(ctx, inventory, party.members, inventoryUI, CANVAS_W, CANVAS_H);
   }
 
   // HUD message (always visible)

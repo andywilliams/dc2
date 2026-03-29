@@ -10,6 +10,7 @@
 
 import { TileMap, TILE_SIZE } from "./tilemap";
 import { Character, PartyState } from "./party";
+import { getEffectiveStat } from "./loot";
 import {
   Enemy,
   isInAttackRange,
@@ -168,7 +169,7 @@ export function selectUnit(combat: CombatState, unitIndex: number, map: TileMap)
     combat.reachableTiles = getReachableTiles(
       map,
       { col: unit.col, row: unit.row },
-      unit.character.stats.moveRange,
+      getEffectiveStat(unit.character, "moveRange"),
     );
     combat.message = `${unit.character.name}: Click a tile to move, or right-click to skip.`;
   } else if (!unit.hasAttacked) {
@@ -200,7 +201,7 @@ export function moveUnit(
     map,
     { col: unit.col, row: unit.row },
     { col: targetCol, row: targetRow },
-    unit.character.stats.moveRange,
+    getEffectiveStat(unit.character, "moveRange"),
   );
 
   if (!path || path.length === 0) return false;
@@ -253,9 +254,9 @@ export function attackEnemy(
   const attackRange = getUnitAttackRange(unit.character);
   if (dist > attackRange) return false;
 
-  // Roll dice!
+  // Roll dice! Use effective ATK (base + equipment)
   const { damage, roll, hit } = calculateDamage(
-    unit.character.stats.atk,
+    getEffectiveStat(unit.character, "atk"),
     enemy.stats.def,
   );
 
@@ -555,7 +556,7 @@ export function updateCombat(combat: CombatState, dt: number, map: TileMap): voi
 }
 
 function performEnemyAttack(combat: CombatState, enemy: Enemy, target: CombatUnit): void {
-  const { damage, roll, hit } = calculateDamage(enemy.stats.atk, target.character.stats.def);
+  const { damage, roll, hit } = calculateDamage(enemy.stats.atk, getEffectiveStat(target.character, "def"));
 
   if (hit) {
     target.character.stats.hp = Math.max(0, target.character.stats.hp - damage);
