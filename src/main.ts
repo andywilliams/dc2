@@ -17,6 +17,7 @@ import {
 import {
   Enemy,
   spawnEnemies,
+  spawnBoss,
   renderEnemies,
   getEnemiesInRange,
   updateAggro,
@@ -55,6 +56,9 @@ import {
 const CANVAS_W = 800;
 const CANVAS_H = 600;
 const COMBAT_TRIGGER_RANGE = 3; // tiles from party to trigger combat
+const MAX_FLOOR = 7;
+
+type GameScreen = "playing" | "game_over" | "victory";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -75,6 +79,7 @@ let party: PartyState = createPartyState(spawnX, spawnY);
 
 // Floor tracking
 let currentFloor = 1;
+let gameScreen: GameScreen = "playing";
 
 // Enemy state
 let enemies: Enemy[] = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
@@ -119,9 +124,10 @@ function spawnChests(
   return result;
 }
 
-/** Regenerate dungeon (press R to get a new layout). */
+/** Regenerate dungeon (press R to get a new layout / restart game). */
 function regenerate(): void {
   currentFloor = 1;
+  gameScreen = "playing";
   const result = generateDungeon();
   tileMap = result.map;
   spawnX = result.spawnX;
@@ -137,8 +143,18 @@ function regenerate(): void {
   showHudMessage("New dungeon generated!");
 }
 
+/** Check if current floor is a boss floor. */
+function isBossFloor(floor: number): boolean {
+  return floor === MAX_FLOOR;
+}
+
 /** Descend to the next floor. */
 function descendFloor(): void {
+  if (currentFloor >= MAX_FLOOR) {
+    // Can't descend past the final floor
+    return;
+  }
+
   currentFloor++;
   const result = generateDungeon();
   tileMap = result.map;
@@ -157,9 +173,18 @@ function descendFloor(): void {
   party.movePointsLeft = party.movePointsPerTurn;
 
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+
+  // Spawn boss on final floor
+  if (isBossFloor(currentFloor)) {
+    const boss = spawnBoss(rooms, tileMap, currentFloor);
+    if (boss) enemies.push(boss);
+    showHudMessage(`Floor ${currentFloor} — The Dungeon Lord awaits!`, 4);
+  } else {
+    showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
+  }
+
   chests = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
   combat = null;
-  showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +246,26 @@ function handleCombatEnd(): void {
     }
   }
 
+  // Check for total party wipe → game over
+  if (!combat.victory) {
+    const anyAlive = party.members.some((m) => m.stats.hp > 0);
+    if (!anyAlive) {
+      gameScreen = "game_over";
+      combat = null;
+      return;
+    }
+  }
+
   // Roll loot drops from defeated enemies
   if (combat.victory) {
+    // Check if boss was defeated on the final floor → victory!
+    const bossDefeated = combat.enemies.some((e) => e.type === "boss" && !e.alive);
+    if (bossDefeated && isBossFloor(currentFloor)) {
+      combat = null;
+      gameScreen = "victory";
+      return;
+    }
+
     for (const ce of combat.enemies) {
       if (!ce.alive) {
         const drop = rollEnemyDrop(currentFloor);
@@ -244,6 +287,84 @@ function handleCombatEnd(): void {
 }
 
 // ---------------------------------------------------------------------------
+// End screens
+// ---------------------------------------------------------------------------
+
+function renderEndScreen(ctx: CanvasRenderingContext2D, screen: GameScreen): void {
+  // Dark background
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  if (screen === "victory") {
+    // Starfield-like sparkles
+    for (let i = 0; i < 50; i++) {
+      const sx = ((i * 137 + 29) % CANVAS_W);
+      const sy = ((i * 89 + 47) % CANVAS_H);
+      const brightness = 0.3 + (i % 5) * 0.15;
+      ctx.fillStyle = `rgba(255, 215, 0, ${brightness})`;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+
+    // Title
+    ctx.fillStyle = "#ffd700";
+    ctx.font = "bold 36px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("VICTORY!", CANVAS_W / 2, CANVAS_H / 2 - 60);
+
+    // Subtitle
+    ctx.fillStyle = "#88cc88";
+    ctx.font = "18px monospace";
+    ctx.fillText("The Dungeon Lord has been vanquished!", CANVAS_W / 2, CANVAS_H / 2 - 20);
+
+    // Stats
+    ctx.fillStyle = "#ccc";
+    ctx.font = "14px monospace";
+    ctx.fillText(`Cleared ${MAX_FLOOR} floors`, CANVAS_W / 2, CANVAS_H / 2 + 20);
+    const surviving = party.members.filter((m) => m.stats.hp > 0).length;
+    ctx.fillText(`${surviving}/${party.members.length} party members survived`, CANVAS_W / 2, CANVAS_H / 2 + 44);
+
+    // Restart prompt
+    ctx.fillStyle = "#aaa";
+    ctx.font = "14px monospace";
+    ctx.fillText("Press R to play again", CANVAS_W / 2, CANVAS_H / 2 + 90);
+  } else {
+    // Game over
+    // Red vignette effect
+    const gradient = ctx.createRadialGradient(
+      CANVAS_W / 2, CANVAS_H / 2, 50,
+      CANVAS_W / 2, CANVAS_H / 2, CANVAS_W / 2,
+    );
+    gradient.addColorStop(0, "rgba(80, 0, 0, 0.3)");
+    gradient.addColorStop(1, "rgba(30, 0, 0, 0.8)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Title
+    ctx.fillStyle = "#cc2222";
+    ctx.font = "bold 36px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("GAME OVER", CANVAS_W / 2, CANVAS_H / 2 - 60);
+
+    // Subtitle
+    ctx.fillStyle = "#aa6666";
+    ctx.font = "18px monospace";
+    ctx.fillText("The party has fallen...", CANVAS_W / 2, CANVAS_H / 2 - 20);
+
+    // Stats
+    ctx.fillStyle = "#888";
+    ctx.font = "14px monospace";
+    ctx.fillText(`Reached Floor ${currentFloor}/${MAX_FLOOR}`, CANVAS_W / 2, CANVAS_H / 2 + 20);
+
+    // Restart prompt
+    ctx.fillStyle = "#aaa";
+    ctx.font = "14px monospace";
+    ctx.fillText("Press R to try again", CANVAS_W / 2, CANVAS_H / 2 + 70);
+  }
+
+  ctx.textAlign = "left";
+}
+
+// ---------------------------------------------------------------------------
 // Game loop
 // ---------------------------------------------------------------------------
 let lastTime = 0;
@@ -254,6 +375,19 @@ function frame(time: number): void {
 
   // — Input ----------------------------------------------------------------
   input.update();
+
+  // — Game Over / Victory screens ------------------------------------------
+  if (gameScreen === "game_over" || gameScreen === "victory") {
+    if (input.justPressed("KeyR")) {
+      regenerate();
+    }
+
+    // Render end screen
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    renderEndScreen(ctx, gameScreen);
+    requestAnimationFrame(frame);
+    return;
+  }
 
   // — Update ---------------------------------------------------------------
 
@@ -382,11 +516,15 @@ function frame(time: number): void {
 
     // Tile interaction hints and stair descent
     if (standingOn?.type === TILE_STAIRS_DOWN) {
-      hudMessage = `Floor ${currentFloor} — [${standingOn.meta?.label ?? "Stairs down"}] — press E to descend`;
-      hudMessageTimer = 0.1;
-      if (input.justPressed("KeyE")) {
-        descendFloor();
+      if (currentFloor >= MAX_FLOOR) {
+        hudMessage = `Floor ${currentFloor}/${MAX_FLOOR} — Defeat the Dungeon Lord to escape!`;
+      } else {
+        hudMessage = `Floor ${currentFloor}/${MAX_FLOOR} — [${standingOn.meta?.label ?? "Stairs down"}] — press E to descend`;
+        if (input.justPressed("KeyE")) {
+          descendFloor();
+        }
       }
+      hudMessageTimer = 0.1;
     } else if (standingOn?.type === TILE_DOOR && standingOn.meta?.label) {
       hudMessage = standingOn.meta.label;
       hudMessageTimer = 0.1;
@@ -445,12 +583,13 @@ function frame(time: number): void {
   } else {
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
+    const floorLabel = isBossFloor(currentFloor) ? `Floor ${currentFloor}/${MAX_FLOOR} (BOSS)` : `Floor ${currentFloor}/${MAX_FLOOR}`;
     ctx.fillText(
-      `Floor ${currentFloor} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+      `${floorLabel} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
       8,
       18,
     );
-    ctx.fillText("Click to move — Space = end turn — E = descend — I = inventory — R = regenerate", 8, 36);
+    ctx.fillText("Click to move — Space = end turn — E = descend — I = inventory — R = restart", 8, 36);
 
     renderPartyHUD(ctx, party, CANVAS_W);
   }

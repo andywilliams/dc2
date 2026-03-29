@@ -16,7 +16,7 @@ export interface EnemyStats {
   detectionRange: number;
 }
 
-export type EnemyType = "skeleton" | "slime" | "bat" | "goblin";
+export type EnemyType = "skeleton" | "slime" | "bat" | "goblin" | "boss";
 
 export interface Enemy {
   id: number;
@@ -83,6 +83,17 @@ const ENEMY_TEMPLATES: EnemyTemplate[] = [
     icon: "G",
   },
 ];
+
+// ── Boss template ──────────────────────────────────────────────────────────
+
+const BOSS_TEMPLATE: EnemyTemplate = {
+  name: "Dungeon Lord",
+  type: "boss",
+  stats: { hp: 80, maxHp: 80, atk: 12, def: 6, moveRange: 4, attackRange: 2, detectionRange: 10 },
+  color: "#aa2222",
+  accent: "#ff4444",
+  icon: "D",
+};
 
 let nextEnemyId = 1;
 
@@ -169,6 +180,25 @@ export function spawnEnemies(
   return enemies;
 }
 
+/** Spawn a boss enemy in the last room of the dungeon. */
+export function spawnBoss(
+  rooms: DungeonRoom[],
+  map: TileMap,
+  floor: number,
+): Enemy | null {
+  if (rooms.length < 2) return null;
+  const room = rooms[rooms.length - 1];
+  // Place boss in center of last room
+  const col = room.x + Math.floor(room.w / 2);
+  const row = room.y + Math.floor(room.h / 2);
+  if (map.isSolid(col, row)) return null;
+
+  const boss = createEnemy(BOSS_TEMPLATE, col, row);
+  scaleEnemyForFloor(boss, floor);
+  boss.aggro = true; // boss is always aware
+  return boss;
+}
+
 // ── Enemy AI (simple: move toward party, attack if in range) ────────────────
 
 export function getEnemiesInRange(
@@ -231,6 +261,9 @@ export function planEnemyAction(
       return planBatAction(enemy, partyCol, partyRow, map, allEnemies);
     case "goblin":
       return planGoblinAction(enemy, partyCol, partyRow, map, allEnemies);
+    case "boss":
+      // Boss uses default aggressive AI but with higher range
+      return planDefaultAction(enemy, partyCol, partyRow, map, allEnemies);
     case "skeleton":
     default:
       return planDefaultAction(enemy, partyCol, partyRow, map, allEnemies);
@@ -466,6 +499,9 @@ export function renderEnemies(
       case "goblin":
         renderGoblin(ctx, enemy);
         break;
+      case "boss":
+        renderBoss(ctx, enemy);
+        break;
       case "skeleton":
       default:
         renderSkeleton(ctx, enemy);
@@ -607,6 +643,47 @@ function renderGoblin(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
   // Icon
   ctx.fillStyle = "#fff";
   ctx.font = "bold 9px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(enemy.icon, enemy.px, enemy.py + 1);
+}
+
+/** Boss: larger sprite with a crown-like shape. */
+function renderBoss(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
+  const size = 20; // larger than normal enemies
+  const half = size / 2;
+
+  // Dark aura glow
+  ctx.fillStyle = "rgba(180, 20, 20, 0.25)";
+  ctx.beginPath();
+  ctx.arc(enemy.px, enemy.py, half + 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = enemy.color;
+  ctx.fillRect(enemy.px - half, enemy.py - half, size, size);
+
+  // Crown points on top
+  ctx.fillStyle = "#ffd700";
+  ctx.beginPath();
+  ctx.moveTo(enemy.px - half, enemy.py - half);
+  ctx.lineTo(enemy.px - half + 3, enemy.py - half - 5);
+  ctx.lineTo(enemy.px - half + 6, enemy.py - half);
+  ctx.lineTo(enemy.px, enemy.py - half - 6);
+  ctx.lineTo(enemy.px + half - 6, enemy.py - half);
+  ctx.lineTo(enemy.px + half - 3, enemy.py - half - 5);
+  ctx.lineTo(enemy.px + half, enemy.py - half);
+  ctx.closePath();
+  ctx.fill();
+
+  // Outline
+  ctx.strokeStyle = enemy.accent;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(enemy.px - half, enemy.py - half, size, size);
+
+  // Icon
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(enemy.icon, enemy.px, enemy.py + 1);
