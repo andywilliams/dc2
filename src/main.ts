@@ -17,6 +17,7 @@ import {
 import {
   Enemy,
   spawnEnemies,
+  spawnBoss,
   renderEnemies,
   getEnemiesInRange,
   updateAggro,
@@ -55,6 +56,13 @@ import {
 const CANVAS_W = 800;
 const CANVAS_H = 600;
 const COMBAT_TRIGGER_RANGE = 3; // tiles from party to trigger combat
+const TOTAL_FLOORS = 7; // MVP: 7 floors, final floor is the boss floor
+
+// ---------------------------------------------------------------------------
+// Game state
+// ---------------------------------------------------------------------------
+type GameState = "exploring" | "game_over" | "victory";
+let gameState: GameState = "exploring";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -121,6 +129,7 @@ function spawnChests(
 
 /** Regenerate dungeon (press R to get a new layout). */
 function regenerate(): void {
+  gameState = "exploring";
   currentFloor = 1;
   const result = generateDungeon();
   tileMap = result.map;
@@ -140,6 +149,13 @@ function regenerate(): void {
 /** Descend to the next floor. */
 function descendFloor(): void {
   currentFloor++;
+
+  // Victory: completed the final floor
+  if (currentFloor > TOTAL_FLOORS) {
+    gameState = "victory";
+    return;
+  }
+
   const result = generateDungeon();
   tileMap = result.map;
   spawnX = result.spawnX;
@@ -157,9 +173,42 @@ function descendFloor(): void {
   party.movePointsLeft = party.movePointsPerTurn;
 
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+
+  // Spawn boss on the final floor
+  if (currentFloor === TOTAL_FLOORS) {
+    const boss = spawnBoss(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+    enemies.push(boss);
+    showHudMessage(`Floor ${currentFloor} — BOSS FLOOR! Defeat the Dark Lord!`, 4);
+  } else {
+    showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
+  }
+
   chests = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
   combat = null;
-  showHudMessage(`Descended to Floor ${currentFloor}!`, 3);
+}
+
+/** Check if the entire party is dead. */
+function isPartyWiped(): boolean {
+  return party.members.every((m) => m.stats.hp <= 0);
+}
+
+/** Restart the game from floor 1. */
+function restartGame(): void {
+  gameState = "exploring";
+  currentFloor = 1;
+  const result = generateDungeon();
+  tileMap = result.map;
+  spawnX = result.spawnX;
+  spawnY = result.spawnY;
+  rooms = result.rooms;
+  camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
+  party = createPartyState(spawnX, spawnY);
+  enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
+  combat = null;
+  inventory = createInventory();
+  chests = spawnChests(rooms, [spawnX], [spawnY], currentFloor);
+  inventoryUI = createInventoryUI();
+  showHudMessage("A new adventure begins!", 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +287,13 @@ function handleCombatEnd(): void {
   }
 
   combat = null;
+
+  // Check for party wipe → game over
+  if (isPartyWiped()) {
+    gameState = "game_over";
+    return;
+  }
+
   // Resume exploration
   party.turnPhase = "move";
   party.reachableTiles = null;
@@ -254,6 +310,65 @@ function frame(time: number): void {
 
   // — Input ----------------------------------------------------------------
   input.update();
+
+  // — Game over / Victory screens -----------------------------------------
+  if (gameState === "game_over" || gameState === "victory") {
+    if (input.justPressed("Space")) {
+      restartGame();
+    }
+
+    // Render the end screen
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Dark background
+    ctx.fillStyle = "#0a0a14";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    if (gameState === "victory") {
+      // Victory screen
+      ctx.fillStyle = "#ffd700";
+      ctx.font = "bold 48px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("VICTORY!", CANVAS_W / 2, CANVAS_H / 2 - 60);
+
+      ctx.fillStyle = "#44ff44";
+      ctx.font = "20px monospace";
+      ctx.fillText("The Dark Lord has been vanquished!", CANVAS_W / 2, CANVAS_H / 2 - 10);
+
+      ctx.fillStyle = "#ccc";
+      ctx.font = "16px monospace";
+      ctx.fillText(`You conquered all ${TOTAL_FLOORS} floors of the dungeon.`, CANVAS_W / 2, CANVAS_H / 2 + 30);
+
+      // Party survivor summary
+      const alive = party.members.filter((m) => m.stats.hp > 0);
+      ctx.fillStyle = "#aaa";
+      ctx.font = "14px monospace";
+      ctx.fillText(`Survivors: ${alive.map((m) => m.name).join(", ") || "None"}`, CANVAS_W / 2, CANVAS_H / 2 + 65);
+    } else {
+      // Game over screen
+      ctx.fillStyle = "#ff4444";
+      ctx.font = "bold 48px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("GAME OVER", CANVAS_W / 2, CANVAS_H / 2 - 60);
+
+      ctx.fillStyle = "#cc8888";
+      ctx.font = "20px monospace";
+      ctx.fillText("Your party has been defeated...", CANVAS_W / 2, CANVAS_H / 2 - 10);
+
+      ctx.fillStyle = "#888";
+      ctx.font = "16px monospace";
+      ctx.fillText(`Reached Floor ${currentFloor} of ${TOTAL_FLOORS}`, CANVAS_W / 2, CANVAS_H / 2 + 30);
+    }
+
+    // Restart prompt
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px monospace";
+    ctx.fillText("Press SPACE to restart", CANVAS_W / 2, CANVAS_H / 2 + 110);
+    ctx.textAlign = "left";
+
+    requestAnimationFrame(frame);
+    return;
+  }
 
   // — Update ---------------------------------------------------------------
 
@@ -445,8 +560,9 @@ function frame(time: number): void {
   } else {
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
+    const floorLabel = currentFloor === TOTAL_FLOORS ? `Floor ${currentFloor}/${TOTAL_FLOORS} (BOSS)` : `Floor ${currentFloor}/${TOTAL_FLOORS}`;
     ctx.fillText(
-      `Floor ${currentFloor} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+      `${floorLabel} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
       8,
       18,
     );

@@ -16,7 +16,7 @@ export interface EnemyStats {
   detectionRange: number;
 }
 
-export type EnemyType = "skeleton" | "slime" | "bat" | "goblin";
+export type EnemyType = "skeleton" | "slime" | "bat" | "goblin" | "boss";
 
 export interface Enemy {
   id: number;
@@ -48,6 +48,15 @@ interface EnemyTemplate {
   accent: string;
   icon: string;
 }
+
+const BOSS_TEMPLATE: EnemyTemplate = {
+  name: "Dark Lord",
+  type: "boss",
+  stats: { hp: 80, maxHp: 80, atk: 14, def: 8, moveRange: 4, attackRange: 2, detectionRange: 10 },
+  color: "#880022",
+  accent: "#ff2244",
+  icon: "B",
+};
 
 const ENEMY_TEMPLATES: EnemyTemplate[] = [
   {
@@ -231,6 +240,8 @@ export function planEnemyAction(
       return planBatAction(enemy, partyCol, partyRow, map, allEnemies);
     case "goblin":
       return planGoblinAction(enemy, partyCol, partyRow, map, allEnemies);
+    case "boss":
+      return planDefaultAction(enemy, partyCol, partyRow, map, allEnemies);
     case "skeleton":
     default:
       return planDefaultAction(enemy, partyCol, partyRow, map, allEnemies);
@@ -466,6 +477,9 @@ export function renderEnemies(
       case "goblin":
         renderGoblin(ctx, enemy);
         break;
+      case "boss":
+        renderBoss(ctx, enemy);
+        break;
       case "skeleton":
       default:
         renderSkeleton(ctx, enemy);
@@ -610,6 +624,74 @@ function renderGoblin(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(enemy.icon, enemy.px, enemy.py + 1);
+}
+
+/** Boss: large dark-red enemy with a crown icon. */
+function renderBoss(ctx: CanvasRenderingContext2D, enemy: Enemy): void {
+  const spriteSize = 20; // larger than normal enemies
+  const half = spriteSize / 2;
+
+  // Dark aura
+  ctx.fillStyle = "rgba(136, 0, 34, 0.3)";
+  ctx.beginPath();
+  ctx.arc(enemy.px, enemy.py, half + 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = enemy.color;
+  ctx.fillRect(enemy.px - half, enemy.py - half, spriteSize, spriteSize);
+
+  // Crown points on top
+  ctx.fillStyle = "#ffd700";
+  ctx.beginPath();
+  ctx.moveTo(enemy.px - half + 2, enemy.py - half);
+  ctx.lineTo(enemy.px - half + 4, enemy.py - half - 5);
+  ctx.lineTo(enemy.px - half + 6, enemy.py - half);
+  ctx.moveTo(enemy.px - 2, enemy.py - half);
+  ctx.lineTo(enemy.px, enemy.py - half - 6);
+  ctx.lineTo(enemy.px + 2, enemy.py - half);
+  ctx.moveTo(enemy.px + half - 6, enemy.py - half);
+  ctx.lineTo(enemy.px + half - 4, enemy.py - half - 5);
+  ctx.lineTo(enemy.px + half - 2, enemy.py - half);
+  ctx.fill();
+
+  // Outline
+  ctx.strokeStyle = enemy.accent;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(enemy.px - half, enemy.py - half, spriteSize, spriteSize);
+
+  // Icon
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(enemy.icon, enemy.px, enemy.py + 1);
+}
+
+/** Spawn a boss enemy in the largest room (excluding spawn room). */
+export function spawnBoss(
+  rooms: DungeonRoom[],
+  _map: TileMap,
+  _occupiedCols: number[],
+  _occupiedRows: number[],
+  floor: number,
+): Enemy {
+  // Pick the largest non-spawn room for the boss
+  let bestRoom = rooms[rooms.length - 1]; // default to last room
+  let bestArea = 0;
+  for (let i = 1; i < rooms.length; i++) {
+    const area = rooms[i].w * rooms[i].h;
+    if (area > bestArea) {
+      bestArea = area;
+      bestRoom = rooms[i];
+    }
+  }
+
+  const col = Math.floor(bestRoom.x + bestRoom.w / 2);
+  const row = Math.floor(bestRoom.y + bestRoom.h / 2);
+  const boss = createEnemy(BOSS_TEMPLATE, col, row);
+  scaleEnemyForFloor(boss, floor);
+  return boss;
 }
 
 /** Render attack range overlay for a selected enemy (debug/targeting). */
