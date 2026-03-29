@@ -237,10 +237,18 @@ function placeStairs(map: TileMap, rooms: Rect[]): void {
  * Generate a procedural dungeon using BSP.
  * Returns the map and the spawn position (center of the first room).
  */
+export interface DungeonRoom {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export function generateDungeon(config: DungeonConfig = {}): {
   map: TileMap;
   spawnX: number;
   spawnY: number;
+  rooms: DungeonRoom[];
 } {
   const cols = config.cols ?? 50;
   const rows = config.rows ?? 40;
@@ -286,5 +294,5 @@ export function generateDungeon(config: DungeonConfig = {}): {
   const spawnX = Math.floor(spawn.x + spawn.w / 2);
   const spawnY = Math.floor(spawn.y + spawn.h / 2);
 
-  return { map, spawnX, spawnY };
+  return { map, spawnX, spawnY, rooms };
 }
