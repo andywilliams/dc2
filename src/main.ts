@@ -1,6 +1,7 @@
 import { Input } from "./input";
 import { Camera } from "./camera";
-import { TileMap, TILE_SIZE, TILE_DOOR, TILE_STAIRS_DOWN, generateTestMap } from "./tilemap";
+import { TileMap, TILE_SIZE, TILE_DOOR, TILE_STAIRS_DOWN } from "./tilemap";
+import { generateDungeon } from "./dungeon";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -18,15 +19,29 @@ canvas.height = CANVAS_H;
 const ctx = canvas.getContext("2d")!;
 
 const input = new Input(canvas);
-const tileMap: TileMap = generateTestMap();
-const camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 
-// Player state — starts in room 1
+// Generate a procedural dungeon
+let { map: tileMap, spawnX, spawnY } = generateDungeon();
+let camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
+
+// Player state — starts at dungeon spawn point
 const player = {
-  x: 5 * TILE_SIZE + TILE_SIZE / 2,
-  y: 5 * TILE_SIZE + TILE_SIZE / 2,
+  x: spawnX * TILE_SIZE + TILE_SIZE / 2,
+  y: spawnY * TILE_SIZE + TILE_SIZE / 2,
   size: 20,
 };
+
+/** Regenerate dungeon (press R to get a new layout). */
+function regenerate(): void {
+  const result = generateDungeon();
+  tileMap = result.map;
+  spawnX = result.spawnX;
+  spawnY = result.spawnY;
+  camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
+  player.x = spawnX * TILE_SIZE + TILE_SIZE / 2;
+  player.y = spawnY * TILE_SIZE + TILE_SIZE / 2;
+  showHudMessage("New dungeon generated!");
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -99,6 +114,11 @@ function frame(time: number): void {
   if (canMoveTo(newX, player.y, half, tileMap)) player.x = newX;
   if (canMoveTo(player.x, newY, half, tileMap)) player.y = newY;
 
+  // Regenerate dungeon on R press
+  if (input.justPressed("KeyR")) {
+    regenerate();
+  }
+
   // Mouse click — inspect tile
   if (input.mouse.clicked) {
     const world = camera.screenToWorld(input.mouse.x, input.mouse.y);
@@ -154,7 +174,7 @@ function frame(time: number): void {
   ctx.fillStyle = "#ccc";
   ctx.font = "14px monospace";
   ctx.fillText(`pos: (${Math.round(player.x)}, ${Math.round(player.y)})  tile: (${pt.col}, ${pt.row})`, 8, 18);
-  ctx.fillText("WASD / Arrows to move — Click to inspect tile", 8, 36);
+  ctx.fillText("WASD / Arrows to move — Click to inspect — R to regenerate", 8, 36);
 
   // HUD message
   if (hudMessage) {
