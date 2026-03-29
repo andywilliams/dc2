@@ -1,14 +1,25 @@
 import { Input } from "./input";
 import { Camera } from "./camera";
-import { TileMap, TILE_SIZE, TILE_DOOR, TILE_STAIRS_DOWN } from "./tilemap";
+import { TILE_SIZE, TILE_DOOR, TILE_STAIRS_DOWN } from "./tilemap";
 import { generateDungeon } from "./dungeon";
+import {
+  PartyState,
+  createPartyState,
+  updateMovement,
+  startMove,
+  endTurn,
+  cacheReachable,
+  renderReachable,
+  renderPathPreview,
+  renderParty,
+  renderPartyHUD,
+} from "./party";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 const CANVAS_W = 800;
 const CANVAS_H = 600;
-const PLAYER_SPEED = 160; // px / sec
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -24,12 +35,8 @@ const input = new Input(canvas);
 let { map: tileMap, spawnX, spawnY } = generateDungeon();
 let camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 
-// Player state — starts at dungeon spawn point
-const player = {
-  x: spawnX * TILE_SIZE + TILE_SIZE / 2,
-  y: spawnY * TILE_SIZE + TILE_SIZE / 2,
-  size: 20,
-};
+// Party state — starts at dungeon spawn point
+let party: PartyState = createPartyState(spawnX, spawnY);
 
 /** Regenerate dungeon (press R to get a new layout). */
 function regenerate(): void {
@@ -38,35 +45,20 @@ function regenerate(): void {
   spawnX = result.spawnX;
   spawnY = result.spawnY;
   camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
-  player.x = spawnX * TILE_SIZE + TILE_SIZE / 2;
-  player.y = spawnY * TILE_SIZE + TILE_SIZE / 2;
+  party = createPartyState(spawnX, spawnY);
   showHudMessage("New dungeon generated!");
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function canMoveTo(px: number, py: number, half: number, map: TileMap): boolean {
-  // Check four corners of the player's bounding box
-  const offsets = [
-    { x: -half, y: -half },
-    { x: half - 1, y: -half },
-    { x: -half, y: half - 1 },
-    { x: half - 1, y: half - 1 },
-  ];
-  for (const o of offsets) {
-    const col = Math.floor((px + o.x) / TILE_SIZE);
-    const row = Math.floor((py + o.y) / TILE_SIZE);
-    if (map.isSolid(col, row)) return false;
-  }
-  return true;
-}
 
-/** Get the tile the player is standing on. */
-function playerTile(): { col: number; row: number } {
+/** Get the tile the mouse is hovering over (world coords). */
+function getHoverTile(): { col: number; row: number } {
+  const world = camera.screenToWorld(input.mouse.x, input.mouse.y);
   return {
-    col: Math.floor(player.x / TILE_SIZE),
-    row: Math.floor(player.y / TILE_SIZE),
+    col: Math.floor(world.x / TILE_SIZE),
+    row: Math.floor(world.y / TILE_SIZE),
   };
 }
 
@@ -92,47 +84,43 @@ function frame(time: number): void {
   input.update();
 
   // — Update ---------------------------------------------------------------
-  let dx = 0;
-  let dy = 0;
-  if (input.isDown("ArrowLeft") || input.isDown("KeyA")) dx -= 1;
-  if (input.isDown("ArrowRight") || input.isDown("KeyD")) dx += 1;
-  if (input.isDown("ArrowUp") || input.isDown("KeyW")) dy -= 1;
-  if (input.isDown("ArrowDown") || input.isDown("KeyS")) dy += 1;
-
-  // Normalise diagonal movement
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len > 0) {
-    dx /= len;
-    dy /= len;
-  }
-
-  const half = player.size / 2;
-  const newX = player.x + dx * PLAYER_SPEED * dt;
-  const newY = player.y + dy * PLAYER_SPEED * dt;
-
-  // Axis-separated collision so you can slide along walls
-  if (canMoveTo(newX, player.y, half, tileMap)) player.x = newX;
-  if (canMoveTo(player.x, newY, half, tileMap)) player.y = newY;
 
   // Regenerate dungeon on R press
   if (input.justPressed("KeyR")) {
     regenerate();
   }
 
-  // Mouse click — inspect tile
-  if (input.mouse.clicked) {
-    const world = camera.screenToWorld(input.mouse.x, input.mouse.y);
-    const col = Math.floor(world.x / TILE_SIZE);
-    const row = Math.floor(world.y / TILE_SIZE);
-    const cell = tileMap.getCell(col, row);
-    if (cell?.meta?.label) {
-      showHudMessage(cell.meta.label);
+  // End turn on Space press
+  if (input.justPressed("Space") && party.turnPhase === "move") {
+    endTurn(party);
+    cacheReachable(party, tileMap);
+    showHudMessage("New turn!");
+  }
+
+  // Click to move
+  if (input.mouse.clicked && party.turnPhase === "move") {
+    const hover = getHoverTile();
+    if (startMove(party, hover.col, hover.row, tileMap)) {
+      // Movement started
+    } else {
+      // Check tile interaction
+      const cell = tileMap.getCell(hover.col, hover.row);
+      if (cell?.meta?.label) {
+        showHudMessage(cell.meta.label);
+      }
     }
   }
 
-  // Check what tile the player is standing on
-  const pt = playerTile();
-  const standingOn = tileMap.getCell(pt.col, pt.row);
+  // Animate movement
+  updateMovement(party, dt);
+
+  // After movement completes, re-cache reachable tiles
+  if (party.turnPhase === "move" && !party.reachableTiles) {
+    cacheReachable(party, tileMap);
+  }
+
+  // Check what tile the party is standing on
+  const standingOn = tileMap.getCell(party.col, party.row);
 
   // Tile interaction hints
   if (standingOn?.type === TILE_STAIRS_DOWN) {
@@ -151,7 +139,7 @@ function frame(time: number): void {
     }
   }
 
-  camera.follow(player.x, player.y);
+  camera.follow(party.px, party.py);
 
   // — Render ---------------------------------------------------------------
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -161,20 +149,39 @@ function frame(time: number): void {
   // Tiles
   tileMap.render(ctx, camera.x, camera.y, CANVAS_W, CANVAS_H);
 
-  // Player
-  ctx.fillStyle = "#4fc3f7";
-  ctx.fillRect(player.x - half, player.y - half, player.size, player.size);
-  ctx.strokeStyle = "#81d4fa";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(player.x - half, player.y - half, player.size, player.size);
+  // Movement range overlay
+  renderReachable(ctx, party, tileMap);
+
+  // Path preview on hover
+  const hover = getHoverTile();
+  renderPathPreview(ctx, party, tileMap, hover.col, hover.row);
+
+  // Hover tile highlight
+  if (party.turnPhase === "move") {
+    const hx = hover.col * TILE_SIZE;
+    const hy = hover.row * TILE_SIZE;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(hx + 1, hy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+  }
+
+  // Party sprites
+  renderParty(ctx, party);
 
   camera.reset(ctx);
 
-  // HUD
+  // HUD — top-left info
   ctx.fillStyle = "#ccc";
   ctx.font = "14px monospace";
-  ctx.fillText(`pos: (${Math.round(player.x)}, ${Math.round(player.y)})  tile: (${pt.col}, ${pt.row})`, 8, 18);
-  ctx.fillText("WASD / Arrows to move — Click to inspect — R to regenerate", 8, 36);
+  ctx.fillText(
+    `Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+    8,
+    18,
+  );
+  ctx.fillText("Click to move — Space = end turn — R = regenerate", 8, 36);
+
+  // Party stats HUD
+  renderPartyHUD(ctx, party, CANVAS_W);
 
   // HUD message
   if (hudMessage) {
