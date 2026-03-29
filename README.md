@@ -1,6 +1,6 @@
 # DC2 — Dungeon Crawler
 
-A turn-based dungeon crawler built with TypeScript and HTML Canvas. Explore procedurally generated dungeons with a 4-character party, fight enemies in tactical combat, and collect loot to equip your team.
+A turn-based dungeon crawler built with TypeScript and HTML Canvas. Explore 7 floors of procedurally generated dungeons with a 4-character party, fight enemies in tactical combat, collect loot, and defeat the Dungeon Lord to win.
 
 ## Getting Started
 
@@ -36,7 +36,7 @@ npm run preview   # preview the production build locally
 
 You control a 4-character party navigating procedurally generated dungeons. Click a floor tile to move — reachable tiles are highlighted based on remaining move points. Press `Space` to end your turn, which also triggers enemy turns.
 
-Each floor has entry stairs (where you spawn) and exit stairs. Press `E` on the exit stairs to descend to the next floor. Enemies grow stronger on deeper floors.
+Each floor has entry stairs (where you spawn) and exit stairs. Press `E` on the exit stairs to descend to the next floor. The dungeon has **7 floors** total, with a boss encounter on the final floor. See [Floor Progression](#floor-progression) for details.
 
 ### The Party
 
@@ -62,7 +62,7 @@ Combat triggers when the party enters an enemy's detection range. It resolves on
 
 ### Enemies
 
-Enemies spawn in dungeon rooms and scale in strength per floor. Each type has distinct AI behavior:
+Enemies spawn in dungeon rooms and scale in strength per floor (see [Floor Progression](#floor-progression)). Each type has distinct AI behavior:
 
 | Type | HP | ATK | DEF | Move | Atk Range | Detection | Behavior |
 |----------|---:|----:|----:|-----:|-----------:|----------:|----------|
@@ -72,6 +72,21 @@ Enemies spawn in dungeon rooms and scale in strength per floor. Each type has di
 | Goblin | 12 | 7 | 2 | 3 | 3 | 6 | Ranged, keeps distance |
 
 Enemies are idle until the party enters their detection range, shown by a red aggro indicator.
+
+#### The Dungeon Lord (Boss)
+
+The final floor features the **Dungeon Lord** — a boss enemy that spawns in the last room. The boss is always aware of the party (no detection phase) and uses aggressive AI with extended range.
+
+| Stat | Value |
+|------|------:|
+| HP | 80 |
+| ATK | 12 |
+| DEF | 6 |
+| Move | 4 |
+| Atk Range | 2 |
+| Detection | 10 (always aggro) |
+
+The boss appears as a larger sprite with a gold crown and a dark red aura. Defeating the Dungeon Lord on floor 7 triggers the victory screen.
 
 ### Loot & Inventory
 
@@ -136,6 +151,30 @@ All items are defined in a central registry (`src/items.ts`). Each definition in
 
 The inventory holds up to **20 items**. If the bag is full, new drops are lost.
 
+## Floor Progression
+
+The dungeon has **7 floors**. Each floor is a freshly generated dungeon with its own rooms, enemies, and loot.
+
+### Descending
+
+Stand on the exit stairs and press `E` to descend. Your party keeps its current HP and inventory but resets position to the new floor's spawn point. On the final floor, the exit stairs are blocked — you must defeat the Dungeon Lord to win.
+
+### Difficulty Scaling
+
+Both enemy stats and enemy count increase with depth:
+
+- **Stat scaling** — All enemy HP, ATK, and DEF are multiplied by `1 + (floor − 1) × 0.15`. By floor 7, enemies have roughly **1.9×** their base stats.
+- **Enemy count** — Rooms spawn 1–2 enemies on floor 1. The maximum increases by 1 for every 2 floors descended (up to 2–4 per room on deeper floors).
+
+### Win & Lose Conditions
+
+| Condition | Trigger | Screen |
+|-----------|---------|--------|
+| **Victory** | Defeat the Dungeon Lord on floor 7 | Gold starfield, survival stats, press `R` to replay |
+| **Game Over** | All 4 party members reach 0 HP | Red vignette, floor reached, press `R` to retry |
+
+The HUD displays your current floor as `Floor X/7` and marks the boss floor with a `(BOSS)` label.
+
 ## Procedural Dungeon Generation
 
 Each floor is generated using a **Binary Space Partition (BSP)** algorithm:
@@ -178,7 +217,8 @@ Each frame runs three phases in order:
 
 - **Pathfinding** — A* algorithm calculates movement paths; BFS floods reachable tiles within move range for the highlight overlay
 - **Camera** — Centers on the party and clamps to world boundaries; provides `screenToWorld` conversion for mouse clicks
-- **Combat** — State machine with 9 phases covering selection, movement, attack animations, and enemy turns
+- **Combat** — State machine with 9 phases covering selection, movement, attack animations, and enemy turns; resolves victory/game-over conditions on combat end
+- **Floor progression** — 7-floor dungeon with stat scaling, boss spawn on final floor, and win/lose end screens
 - **Items** — Pure data module defining item templates, rarity tiers, and stat modifiers; registry pattern with lookup functions (`getItemDef`, `getItemDefsByType`, `getItemDefsByRarity`)
 - **Loot** — Weighted random drops with floor scaling; equipment modifies effective stats used in combat
 
