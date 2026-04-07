@@ -80,33 +80,24 @@ export function startCombat(
   party: PartyState,
   enemies: Enemy[],
 ): CombatState {
-  // Create individual combat units from party members
-  // Spread them in a 2x2 formation around the party position
-  const offsets = [
-    { dc: 0, dr: 0 },
-    { dc: 1, dr: 0 },
-    { dc: 0, dr: 1 },
-    { dc: 1, dr: 1 },
-  ];
-
-  const units: CombatUnit[] = party.members
-    .filter((m) => m.stats.hp > 0)
-    .map((char, i) => {
-      const ofs = offsets[i % offsets.length];
-      const col = party.col + ofs.dc;
-      const row = party.row + ofs.dr;
-      return {
-        character: char,
-        col,
-        row,
-        px: col * TILE_SIZE + TILE_SIZE / 2,
-        py: row * TILE_SIZE + TILE_SIZE / 2,
-        hasMoved: false,
-        hasAttacked: false,
-        movePath: [],
-        moveIndex: 0,
-      };
+  // Create individual combat units from party members at their current positions
+  const units: CombatUnit[] = [];
+  for (let i = 0; i < party.members.length; i++) {
+    const char = party.members[i];
+    if (char.stats.hp <= 0) continue;
+    const ms = party.memberStates[i];
+    units.push({
+      character: char,
+      col: ms.col,
+      row: ms.row,
+      px: ms.px,
+      py: ms.py,
+      hasMoved: false,
+      hasAttacked: false,
+      movePath: [],
+      moveIndex: 0,
     });
+  }
 
   // All enemies entering combat become aggro
   const combatEnemies = enemies.filter((e) => e.alive);

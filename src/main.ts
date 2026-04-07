@@ -13,6 +13,14 @@ import {
   renderPathPreview,
   renderParty,
   renderPartyHUD,
+  getActive,
+  getPartyCenter,
+  getMemberAt,
+  selectMember,
+  selectNextMember,
+  completeMemberTurn,
+  allMembersDone,
+  resetMemberPositions,
 } from "./party";
 import {
   Enemy,
@@ -55,7 +63,7 @@ import {
 // ---------------------------------------------------------------------------
 const CANVAS_W = 800;
 const CANVAS_H = 600;
-const COMBAT_TRIGGER_RANGE = 3; // tiles from party to trigger combat
+const COMBAT_TRIGGER_RANGE = 3; // tiles from any member to trigger combat
 const MAX_FLOOR = 7;
 
 type GameScreen = "playing" | "game_over" | "victory";
@@ -109,7 +117,6 @@ function spawnChests(
   for (let ri = 1; ri < dungeonRooms.length; ri++) {
     if (Math.random() > 0.4) continue;
     const room = dungeonRooms[ri];
-    // Place in a random interior tile
     for (let attempt = 0; attempt < 10; attempt++) {
       const col = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
       const row = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
@@ -150,10 +157,7 @@ function isBossFloor(floor: number): boolean {
 
 /** Descend to the next floor. */
 function descendFloor(): void {
-  if (currentFloor >= MAX_FLOOR) {
-    // Can't descend past the final floor
-    return;
-  }
+  if (currentFloor >= MAX_FLOOR) return;
 
   currentFloor++;
   const result = generateDungeon();
@@ -163,18 +167,11 @@ function descendFloor(): void {
   rooms = result.rooms;
   camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 
-  // Keep party HP but reset position
-  party.col = spawnX;
-  party.row = spawnY;
-  party.px = spawnX * TILE_SIZE + TILE_SIZE / 2;
-  party.py = spawnY * TILE_SIZE + TILE_SIZE / 2;
-  party.turnPhase = "move";
-  party.reachableTiles = null;
-  party.movePointsLeft = party.movePointsPerTurn;
+  // Keep party HP but reset positions around spawn
+  resetMemberPositions(party, spawnX, spawnY);
 
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
 
-  // Spawn boss on final floor
   if (isBossFloor(currentFloor)) {
     const boss = spawnBoss(rooms, tileMap, currentFloor);
     if (boss) enemies.push(boss);
@@ -209,16 +206,25 @@ function showHudMessage(msg: string, duration = 2): void {
   hudMessageTimer = duration;
 }
 
-/** Check if combat should trigger (enemies near party). */
+/** Check if combat should trigger (any party member near enemies). */
 function checkCombatTrigger(): void {
   if (combat) return;
 
-  const nearbyEnemies = getEnemiesInRange(
-    enemies,
-    party.col,
-    party.row,
-    COMBAT_TRIGGER_RANGE,
-  );
+  // Check all alive members for nearby enemies
+  const nearbySet = new Set<number>();
+  const nearbyEnemies: Enemy[] = [];
+
+  for (let i = 0; i < party.memberStates.length; i++) {
+    if (party.members[i].stats.hp <= 0) continue;
+    const ms = party.memberStates[i];
+    const found = getEnemiesInRange(enemies, ms.col, ms.row, COMBAT_TRIGGER_RANGE);
+    for (const e of found) {
+      if (!nearbySet.has(e.id)) {
+        nearbySet.add(e.id);
+        nearbyEnemies.push(e);
+      }
+    }
+  }
 
   if (nearbyEnemies.length > 0) {
     combat = startCombat(party, nearbyEnemies);
@@ -246,7 +252,7 @@ function handleCombatEnd(): void {
     }
   }
 
-  // Check for total party wipe → game over
+  // Check for total party wipe -> game over
   if (!combat.victory) {
     const anyAlive = party.members.some((m) => m.stats.hp > 0);
     if (!anyAlive) {
@@ -258,7 +264,6 @@ function handleCombatEnd(): void {
 
   // Roll loot drops from defeated enemies
   if (combat.victory) {
-    // Check if boss was defeated on the final floor → victory!
     const bossDefeated = combat.enemies.some((e) => e.type === "boss" && !e.alive);
     if (bossDefeated && isBossFloor(currentFloor)) {
       combat = null;
@@ -282,8 +287,11 @@ function handleCombatEnd(): void {
 
   combat = null;
   // Resume exploration
-  party.turnPhase = "move";
-  party.reachableTiles = null;
+  party.turnPhase = "select";
+  // Invalidate all reachable caches
+  for (const ms of party.memberStates) {
+    ms.reachableTiles = null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,12 +299,10 @@ function handleCombatEnd(): void {
 // ---------------------------------------------------------------------------
 
 function renderEndScreen(ctx: CanvasRenderingContext2D, screen: GameScreen): void {
-  // Dark background
   ctx.fillStyle = "#111";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   if (screen === "victory") {
-    // Starfield-like sparkles
     for (let i = 0; i < 50; i++) {
       const sx = ((i * 137 + 29) % CANVAS_W);
       const sy = ((i * 89 + 47) % CANVAS_H);
@@ -305,31 +311,25 @@ function renderEndScreen(ctx: CanvasRenderingContext2D, screen: GameScreen): voi
       ctx.fillRect(sx, sy, 2, 2);
     }
 
-    // Title
     ctx.fillStyle = "#ffd700";
     ctx.font = "bold 36px monospace";
     ctx.textAlign = "center";
     ctx.fillText("VICTORY!", CANVAS_W / 2, CANVAS_H / 2 - 60);
 
-    // Subtitle
     ctx.fillStyle = "#88cc88";
     ctx.font = "18px monospace";
     ctx.fillText("The Dungeon Lord has been vanquished!", CANVAS_W / 2, CANVAS_H / 2 - 20);
 
-    // Stats
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
     ctx.fillText(`Cleared ${MAX_FLOOR} floors`, CANVAS_W / 2, CANVAS_H / 2 + 20);
     const surviving = party.members.filter((m) => m.stats.hp > 0).length;
     ctx.fillText(`${surviving}/${party.members.length} party members survived`, CANVAS_W / 2, CANVAS_H / 2 + 44);
 
-    // Restart prompt
     ctx.fillStyle = "#aaa";
     ctx.font = "14px monospace";
     ctx.fillText("Press R to play again", CANVAS_W / 2, CANVAS_H / 2 + 90);
   } else {
-    // Game over
-    // Red vignette effect
     const gradient = ctx.createRadialGradient(
       CANVAS_W / 2, CANVAS_H / 2, 50,
       CANVAS_W / 2, CANVAS_H / 2, CANVAS_W / 2,
@@ -339,23 +339,19 @@ function renderEndScreen(ctx: CanvasRenderingContext2D, screen: GameScreen): voi
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Title
     ctx.fillStyle = "#cc2222";
     ctx.font = "bold 36px monospace";
     ctx.textAlign = "center";
     ctx.fillText("GAME OVER", CANVAS_W / 2, CANVAS_H / 2 - 60);
 
-    // Subtitle
     ctx.fillStyle = "#aa6666";
     ctx.font = "18px monospace";
     ctx.fillText("The party has fallen...", CANVAS_W / 2, CANVAS_H / 2 - 20);
 
-    // Stats
     ctx.fillStyle = "#888";
     ctx.font = "14px monospace";
     ctx.fillText(`Reached Floor ${currentFloor}/${MAX_FLOOR}`, CANVAS_W / 2, CANVAS_H / 2 + 20);
 
-    // Restart prompt
     ctx.fillStyle = "#aaa";
     ctx.font = "14px monospace";
     ctx.fillText("Press R to try again", CANVAS_W / 2, CANVAS_H / 2 + 70);
@@ -370,7 +366,7 @@ function renderEndScreen(ctx: CanvasRenderingContext2D, screen: GameScreen): voi
 let lastTime = 0;
 
 function frame(time: number): void {
-  const dt = Math.min((time - lastTime) / 1000, 0.05); // cap delta
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
   lastTime = time;
 
   // — Input ----------------------------------------------------------------
@@ -381,8 +377,6 @@ function frame(time: number): void {
     if (input.justPressed("KeyR")) {
       regenerate();
     }
-
-    // Render end screen
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     renderEndScreen(ctx, gameScreen);
     requestAnimationFrame(frame);
@@ -397,16 +391,13 @@ function frame(time: number): void {
 
     const hover = getHoverTile();
 
-    // Handle combat-over: press Space to exit
     if (combat.phase === "combat_over") {
       if (input.justPressed("Space")) {
         handleCombatEnd();
       }
     }
 
-    // Player input during combat
     if (combat.phase === "player_select" && input.mouse.clicked) {
-      // Check if clicked on a unit
       for (let i = 0; i < combat.units.length; i++) {
         const unit = combat.units[i];
         if (unit.character.stats.hp <= 0) continue;
@@ -421,7 +412,6 @@ function frame(time: number): void {
       if (input.mouse.clicked) {
         moveUnit(combat, hover.col, hover.row, tileMap);
       }
-      // Right-click to skip move
       if (input.justPressed("KeyX")) {
         skipMove(combat);
       }
@@ -431,7 +421,6 @@ function frame(time: number): void {
       if (input.mouse.clicked) {
         attackEnemy(combat, hover.col, hover.row);
       }
-      // Right-click / X to skip attack
       if (input.justPressed("KeyX")) {
         skipAttack(combat);
       }
@@ -462,23 +451,63 @@ function frame(time: number): void {
       regenerate();
     }
 
-    // End turn on Space press
-    if (input.justPressed("Space") && party.turnPhase === "move" && !inventoryUI.open) {
-      endTurn(party);
-      cacheReachable(party, tileMap);
-      showHudMessage("New turn!");
+    // Tab to cycle to next character
+    if (input.justPressed("Tab") && !inventoryUI.open) {
+      if (party.turnPhase === "select" || party.turnPhase === "move") {
+        selectNextMember(party);
+        if (party.turnPhase === "select") party.turnPhase = "move";
+      }
     }
 
-    // Click to move (only when inventory is closed)
-    if (input.mouse.clicked && party.turnPhase === "move" && !inventoryUI.open) {
+    // 1-4 keys to select specific character (when not in inventory)
+    if (!inventoryUI.open && (party.turnPhase === "select" || party.turnPhase === "move")) {
+      if (input.justPressed("Digit1")) selectMember(party, 0);
+      if (input.justPressed("Digit2")) selectMember(party, 1);
+      if (input.justPressed("Digit3")) selectMember(party, 2);
+      if (input.justPressed("Digit4")) selectMember(party, 3);
+    }
+
+    // Space to complete current character's turn or end all turns
+    if (input.justPressed("Space") && !inventoryUI.open) {
+      if (party.turnPhase === "move" || party.turnPhase === "select") {
+        if (allMembersDone(party)) {
+          // All done — end turn to start new round
+          endTurn(party);
+          showHudMessage("New turn!");
+        } else {
+          // Complete current character's turn
+          const moreRemain = completeMemberTurn(party);
+          if (moreRemain) {
+            const activeName = party.members[party.activeCharIdx].name;
+            showHudMessage(`${activeName}'s turn`);
+          } else {
+            showHudMessage("New turn!");
+          }
+        }
+      }
+    }
+
+    // Click to select character or move (when inventory is closed)
+    if (input.mouse.clicked && !inventoryUI.open) {
       const hover = getHoverTile();
-      if (startMove(party, hover.col, hover.row, tileMap)) {
-        // Movement started
-      } else {
-        // Check tile interaction
-        const cell = tileMap.getCell(hover.col, hover.row);
-        if (cell?.meta?.label) {
-          showHudMessage(cell.meta.label);
+
+      if (party.turnPhase === "select" || party.turnPhase === "move") {
+        // First check if clicking on a party member to select them
+        const clickedMember = getMemberAt(party, hover.col, hover.row);
+        if (clickedMember >= 0 && !party.memberStates[clickedMember].turnComplete) {
+          selectMember(party, clickedMember);
+          party.turnPhase = "move";
+        } else if (party.turnPhase === "move") {
+          // Try to move the active character
+          if (startMove(party, hover.col, hover.row, tileMap)) {
+            // Movement started
+          } else {
+            // Check tile interaction
+            const cell = tileMap.getCell(hover.col, hover.row);
+            if (cell?.meta?.label) {
+              showHudMessage(cell.meta.label);
+            }
+          }
         }
       }
     }
@@ -486,35 +515,48 @@ function frame(time: number): void {
     // Animate movement
     updateMovement(party, dt);
 
-    // After movement completes, re-cache reachable tiles
-    if (party.turnPhase === "move" && !party.reachableTiles) {
-      cacheReachable(party, tileMap);
+    // After movement completes, re-cache reachable tiles for active member
+    if (party.turnPhase === "move") {
+      const activeMs = getActive(party);
+      if (!activeMs.reachableTiles) {
+        cacheReachable(party, tileMap);
+      }
     }
 
-    // Check for chest interaction at party position
+    // Check for chest interaction at any alive member's position
     for (const chest of chests) {
-      if (!chest.opened && chest.col === party.col && chest.row === party.row) {
-        chest.opened = true;
-        if (addItem(inventory, chest.item)) {
-          showHudMessage(`Opened chest: ${chest.item.name}!`, 3);
-        } else {
-          showHudMessage("Chest opened but inventory full!", 3);
+      if (chest.opened) continue;
+      for (let i = 0; i < party.memberStates.length; i++) {
+        if (party.members[i].stats.hp <= 0) continue;
+        const ms = party.memberStates[i];
+        if (ms.col === chest.col && ms.row === chest.row) {
+          chest.opened = true;
+          if (addItem(inventory, chest.item)) {
+            showHudMessage(`${party.members[i].name} opened chest: ${chest.item.name}!`, 3);
+          } else {
+            showHudMessage("Chest opened but inventory full!", 3);
+          }
+          break;
         }
       }
     }
 
-    // Update enemy aggro based on party proximity
-    updateAggro(enemies, party.col, party.row);
+    // Update enemy aggro based on proximity to any party member
+    for (let i = 0; i < party.memberStates.length; i++) {
+      if (party.members[i].stats.hp <= 0) continue;
+      const ms = party.memberStates[i];
+      updateAggro(enemies, ms.col, ms.row);
+    }
 
     // Check for combat trigger after movement
-    if (party.turnPhase === "move") {
+    if (party.turnPhase === "move" || party.turnPhase === "select") {
       checkCombatTrigger();
     }
 
-    // Check what tile the party is standing on
-    const standingOn = tileMap.getCell(party.col, party.row);
+    // Check stair interaction for active character
+    const activeMs = getActive(party);
+    const standingOn = tileMap.getCell(activeMs.col, activeMs.row);
 
-    // Tile interaction hints and stair descent
     if (standingOn?.type === TILE_STAIRS_DOWN) {
       if (currentFloor >= MAX_FLOOR) {
         hudMessage = `Floor ${currentFloor}/${MAX_FLOOR} — Defeat the Dungeon Lord to escape!`;
@@ -539,7 +581,14 @@ function frame(time: number): void {
     }
   }
 
-  camera.follow(party.px, party.py);
+  // Camera follows active character (or party center during combat)
+  if (combat && combat.active) {
+    const center = getPartyCenter(party);
+    camera.follow(center.px, center.py);
+  } else {
+    const activeMs = getActive(party);
+    camera.follow(activeMs.px, activeMs.py);
+  }
 
   // — Render ---------------------------------------------------------------
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -550,12 +599,10 @@ function frame(time: number): void {
   tileMap.render(ctx, camera.x, camera.y, CANVAS_W, CANVAS_H);
 
   if (combat && combat.active) {
-    // Combat rendering (world coords)
     renderCombat(ctx, combat, CANVAS_W, CANVAS_H);
     renderEnemies(ctx, combat.enemies);
     renderPopups(ctx, combat);
   } else {
-    // Exploration rendering
     renderReachable(ctx, party, tileMap);
 
     const hover = getHoverTile();
@@ -581,15 +628,18 @@ function frame(time: number): void {
   if (combat && combat.active) {
     renderCombatHUD(ctx, combat, CANVAS_W, CANVAS_H);
   } else {
+    const activeMs = getActive(party);
+    const activeName = party.members[party.activeCharIdx].name;
+
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
     const floorLabel = isBossFloor(currentFloor) ? `Floor ${currentFloor}/${MAX_FLOOR} (BOSS)` : `Floor ${currentFloor}/${MAX_FLOOR}`;
     ctx.fillText(
-      `${floorLabel} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+      `${floorLabel} — Active: ${activeName} (${activeMs.col}, ${activeMs.row})  Moves: ${activeMs.movePointsLeft}/${party.members[party.activeCharIdx].stats.moveRange}`,
       8,
       18,
     );
-    ctx.fillText("Click to move — Space = end turn — E = descend — I = inventory — R = restart", 8, 36);
+    ctx.fillText("Click=select/move  Tab=next char  Space=end char turn  E=descend  I=inventory  R=restart", 8, 36);
 
     renderPartyHUD(ctx, party, CANVAS_W);
   }
@@ -602,7 +652,7 @@ function frame(time: number): void {
   // HUD message (always visible)
   if (hudMessage && !combat) {
     ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(CANVAS_W / 2 - 160, CANVAS_H - 50, 320, 30);
+    ctx.fillRect(CANVAS_W / 2 - 200, CANVAS_H - 50, 400, 30);
     ctx.fillStyle = "#ffd700";
     ctx.font = "14px monospace";
     ctx.textAlign = "center";
