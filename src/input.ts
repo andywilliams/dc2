@@ -19,6 +19,7 @@ export class Input {
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
+      if (e.code === "Tab") e.preventDefault();
       if (!e.repeat) this._pendingDown.push(e.code);
     });
     window.addEventListener("keyup", (e) => {

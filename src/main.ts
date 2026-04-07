@@ -8,6 +8,13 @@ import {
   updateMovement,
   startMove,
   endTurn,
+  endMemberTurn,
+  selectMember,
+  selectNextAvailable,
+  canAct,
+  getMemberAtTile,
+  getActiveMemberState,
+  getPartyFocusPos,
   cacheReachable,
   renderReachable,
   renderPathPreview,
@@ -163,14 +170,19 @@ function descendFloor(): void {
   rooms = result.rooms;
   camera = new Camera(CANVAS_W, CANVAS_H, tileMap.widthPx, tileMap.heightPx);
 
-  // Keep party HP but reset position
-  party.col = spawnX;
-  party.row = spawnY;
-  party.px = spawnX * TILE_SIZE + TILE_SIZE / 2;
-  party.py = spawnY * TILE_SIZE + TILE_SIZE / 2;
+  // Keep party HP but reset positions to new spawn
+  for (let i = 0; i < party.memberStates.length; i++) {
+    const ms = party.memberStates[i];
+    ms.col = spawnX;
+    ms.row = spawnY;
+    ms.px = spawnX * TILE_SIZE + TILE_SIZE / 2;
+    ms.py = spawnY * TILE_SIZE + TILE_SIZE / 2;
+    ms.movePointsLeft = party.members[i].stats.moveRange;
+    ms.turnComplete = false;
+    ms.reachableTiles = null;
+  }
+  party.activeCharIdx = 0;
   party.turnPhase = "move";
-  party.reachableTiles = null;
-  party.movePointsLeft = party.movePointsPerTurn;
 
   enemies = spawnEnemies(rooms, tileMap, [spawnX], [spawnY], currentFloor);
 
@@ -209,20 +221,19 @@ function showHudMessage(msg: string, duration = 2): void {
   hudMessageTimer = duration;
 }
 
-/** Check if combat should trigger (enemies near party). */
+/** Check if combat should trigger (enemies near any alive party member). */
 function checkCombatTrigger(): void {
   if (combat) return;
 
-  const nearbyEnemies = getEnemiesInRange(
-    enemies,
-    party.col,
-    party.row,
-    COMBAT_TRIGGER_RANGE,
-  );
-
-  if (nearbyEnemies.length > 0) {
-    combat = startCombat(party, nearbyEnemies);
-    showHudMessage("Enemies spotted! Combat begins!", 2);
+  for (let i = 0; i < party.memberStates.length; i++) {
+    if (party.members[i].stats.hp <= 0) continue;
+    const ms = party.memberStates[i];
+    const nearbyEnemies = getEnemiesInRange(enemies, ms.col, ms.row, COMBAT_TRIGGER_RANGE);
+    if (nearbyEnemies.length > 0) {
+      combat = startCombat(party, nearbyEnemies);
+      showHudMessage("Enemies spotted! Combat begins!", 2);
+      return;
+    }
   }
 }
 
@@ -281,9 +292,8 @@ function handleCombatEnd(): void {
   }
 
   combat = null;
-  // Resume exploration
-  party.turnPhase = "move";
-  party.reachableTiles = null;
+  // Resume exploration — reset turns for new round
+  endTurn(party);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,12 +454,20 @@ function frame(time: number): void {
       inventoryUI.open = !inventoryUI.open;
     }
 
-    // Character selection in inventory: 1-4 keys
+    // Character selection: 1-4 keys (inventory or exploration)
     if (inventoryUI.open) {
       if (input.justPressed("Digit1")) inventoryUI.selectedCharIdx = 0;
       if (input.justPressed("Digit2")) inventoryUI.selectedCharIdx = 1;
       if (input.justPressed("Digit3")) inventoryUI.selectedCharIdx = 2;
       if (input.justPressed("Digit4")) inventoryUI.selectedCharIdx = 3;
+    } else if (party.turnPhase === "move") {
+      // Select party member by number key
+      if (input.justPressed("Digit1") && canAct(party, 0)) selectMember(party, 0);
+      if (input.justPressed("Digit2") && canAct(party, 1)) selectMember(party, 1);
+      if (input.justPressed("Digit3") && canAct(party, 2)) selectMember(party, 2);
+      if (input.justPressed("Digit4") && canAct(party, 3)) selectMember(party, 3);
+      // Tab = next available member
+      if (input.justPressed("Tab")) selectNextAvailable(party);
     }
 
     // Handle clicks — inventory UI consumes clicks when open
@@ -462,17 +480,28 @@ function frame(time: number): void {
       regenerate();
     }
 
-    // End turn on Space press
+    // Space = end current member's turn (auto-advance to next, or new round if all done)
     if (input.justPressed("Space") && party.turnPhase === "move" && !inventoryUI.open) {
-      endTurn(party);
-      cacheReachable(party, tileMap);
-      showHudMessage("New turn!");
+      endMemberTurn(party);
+      if (party.turnPhase as string === "done") {
+        // All members acted — start new round
+        endTurn(party);
+        showHudMessage("New turn!");
+      } else {
+        const active = party.members[party.activeCharIdx];
+        showHudMessage(`${active.name}'s turn`);
+      }
     }
 
-    // Click to move (only when inventory is closed)
+    // Click to move active member (only when inventory is closed)
     if (input.mouse.clicked && party.turnPhase === "move" && !inventoryUI.open) {
       const hover = getHoverTile();
-      if (startMove(party, hover.col, hover.row, tileMap)) {
+
+      // Check if clicking on a party member to select them
+      const clickedMember = getMemberAtTile(party, hover.col, hover.row);
+      if (clickedMember >= 0 && canAct(party, clickedMember)) {
+        selectMember(party, clickedMember);
+      } else if (startMove(party, hover.col, hover.row, tileMap)) {
         // Movement started
       } else {
         // Check tile interaction
@@ -487,32 +516,43 @@ function frame(time: number): void {
     updateMovement(party, dt);
 
     // After movement completes, re-cache reachable tiles
-    if (party.turnPhase === "move" && !party.reachableTiles) {
-      cacheReachable(party, tileMap);
+    if (party.turnPhase === "move") {
+      const ms = getActiveMemberState(party);
+      if (ms && !ms.reachableTiles) {
+        cacheReachable(party, tileMap);
+      }
     }
 
-    // Check for chest interaction at party position
+    // Check for chest interaction at any member position
     for (const chest of chests) {
-      if (!chest.opened && chest.col === party.col && chest.row === party.row) {
-        chest.opened = true;
-        if (addItem(inventory, chest.item)) {
-          showHudMessage(`Opened chest: ${chest.item.name}!`, 3);
-        } else {
-          showHudMessage("Chest opened but inventory full!", 3);
+      if (chest.opened) continue;
+      for (let i = 0; i < party.memberStates.length; i++) {
+        if (party.members[i].stats.hp <= 0) continue;
+        const ms = party.memberStates[i];
+        if (ms.col === chest.col && ms.row === chest.row) {
+          chest.opened = true;
+          if (addItem(inventory, chest.item)) {
+            showHudMessage(`Opened chest: ${chest.item.name}!`, 3);
+          } else {
+            showHudMessage("Chest opened but inventory full!", 3);
+          }
+          break;
         }
       }
     }
 
-    // Update enemy aggro based on party proximity
-    updateAggro(enemies, party.col, party.row);
+    // Update enemy aggro based on nearest alive party member
+    const focusMember = getActiveMemberState(party) ?? party.memberStates[0];
+    updateAggro(enemies, focusMember.col, focusMember.row);
 
     // Check for combat trigger after movement
     if (party.turnPhase === "move") {
       checkCombatTrigger();
     }
 
-    // Check what tile the party is standing on
-    const standingOn = tileMap.getCell(party.col, party.row);
+    // Check what tile the active member is standing on
+    const activeMs = getActiveMemberState(party);
+    const standingOn = activeMs ? tileMap.getCell(activeMs.col, activeMs.row) : null;
 
     // Tile interaction hints and stair descent
     if (standingOn?.type === TILE_STAIRS_DOWN) {
@@ -539,7 +579,8 @@ function frame(time: number): void {
     }
   }
 
-  camera.follow(party.px, party.py);
+  const focusPos = getPartyFocusPos(party);
+  camera.follow(focusPos.px, focusPos.py);
 
   // — Render ---------------------------------------------------------------
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -584,12 +625,16 @@ function frame(time: number): void {
     ctx.fillStyle = "#ccc";
     ctx.font = "14px monospace";
     const floorLabel = isBossFloor(currentFloor) ? `Floor ${currentFloor}/${MAX_FLOOR} (BOSS)` : `Floor ${currentFloor}/${MAX_FLOOR}`;
+    const activeChar = party.activeCharIdx >= 0 ? party.members[party.activeCharIdx] : null;
+    const activeState = getActiveMemberState(party);
+    const posLabel = activeState ? `(${activeState.col}, ${activeState.row})` : "";
+    const moveLabel = activeState ? `Moves: ${activeState.movePointsLeft}/${activeChar?.stats.moveRange ?? 0}` : "";
     ctx.fillText(
-      `${floorLabel} — Party: (${party.col}, ${party.row})  Moves: ${party.movePointsLeft}/${party.movePointsPerTurn}`,
+      `${floorLabel} — ${activeChar?.name ?? "---"}: ${posLabel}  ${moveLabel}`,
       8,
       18,
     );
-    ctx.fillText("Click to move — Space = end turn — E = descend — I = inventory — R = restart", 8, 36);
+    ctx.fillText("Click=move 1-4=select Tab=next Space=end turn E=descend I=inv R=restart", 8, 36);
 
     renderPartyHUD(ctx, party, CANVAS_W);
   }
